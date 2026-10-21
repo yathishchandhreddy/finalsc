@@ -3,8 +3,10 @@ import { useFrame } from '@react-three/fiber';
 import { useGLTF, useAnimations } from '@react-three/drei';
 import * as THREE from 'three';
 import { PenguinState } from '../types';
+import defaultPenguinAsset from '../assets/Meshy_AI_VSB_Tech_Penguin_1012173021_texture.glb?url';
 
-export const PENGUIN_MODEL_PATH = '/Meshy_AI_VSB_Tech_Penguin_1012173021_texture.glb';
+// Permanent built-in 3D model bundled with the codebase for Vercel and production
+export const PENGUIN_MODEL_PATH = defaultPenguinAsset || '/Meshy_AI_VSB_Tech_Penguin_1012173021_texture.glb';
 
 interface PenguinModelProps {
   state: PenguinState;
