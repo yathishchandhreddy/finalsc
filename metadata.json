@@ -1,0 +1,8 @@
+{
+  "name": "VSB Engineering College AI Chatbot & Campus Guide",
+  "description": "Official intelligent 3D AI assistant for VSB Engineering College, Karur. Features an animated 3D Tech Penguin, voice synthesis, verified campus knowledge retrieval, and administrative document management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
