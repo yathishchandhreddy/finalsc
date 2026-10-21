@@ -1,0 +1,10 @@
+export default async function handler(req: any, res: any) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Content-Type', 'application/json');
+  return res.status(200).json({
+    status: 'online',
+    institution: 'VSB Engineering College, Karur',
+    tneaCode: 2622,
+    timestamp: new Date().toISOString(),
+  });
+}

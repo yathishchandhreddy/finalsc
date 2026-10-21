@@ -12,6 +12,7 @@ import {
   isVoiceEnabled,
   setVoiceEnabled,
 } from './utils/speech';
+import { generateClientCollegeResponse } from './utils/collegeKnowledge';
 
 const SESSIONS_STORAGE_KEY = 'vsb_chat_sessions_v1';
 const CURRENT_SESSION_KEY = 'vsb_current_session_id';
@@ -231,31 +232,61 @@ export default function App() {
     // Abort controller for network cancellation
     abortControllerRef.current = new AbortController();
 
+    let answerText = '';
+    let answerSources: { documentName: string; relevanceScore: number }[] = [];
+    let answerState: PenguinState = 'speaking';
+
     try {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          query: text,
-          history: messages.map((m) => ({ role: m.role, content: m.content })),
-        }),
-        signal: abortControllerRef.current.signal,
-      });
+      let isSuccess = false;
 
-      const data = await res.json();
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            query: text,
+            history: messages.map((m) => ({ role: m.role, content: m.content })),
+          }),
+          signal: abortControllerRef.current.signal,
+        });
 
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to get answer from college AI server');
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          const data = await res.json();
+          if (res.ok && data && data.answer) {
+            answerText = data.answer;
+            answerSources = data.sources || [];
+            answerState = (data.penguinState as PenguinState) || 'speaking';
+            isSuccess = true;
+          }
+        }
+      } catch (fetchErr: any) {
+        if (fetchErr.name === 'AbortError') {
+          console.log('Query aborted by student');
+          setVoiceStatus(isVoiceOn ? 'ready' : 'off');
+          setPenguinState('idle');
+          setIsLoading(false);
+          return;
+        }
+        console.warn('Backend API unreachable or non-JSON returned, utilizing institutional knowledge base:', fetchErr);
+      }
+
+      // If backend was not reached or returned non-JSON (such as Vercel 404 HTML), use verified college knowledge
+      if (!isSuccess || !answerText) {
+        const fallback = generateClientCollegeResponse(text, messages);
+        answerText = fallback.answer;
+        answerSources = fallback.sources;
+        answerState = fallback.penguinState;
       }
 
       const assistantMsgId = 'msg_asst_' + Date.now();
       const assistantMessage: ChatMessage = {
         id: assistantMsgId,
         role: 'assistant',
-        content: data.answer,
+        content: answerText,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        sources: data.sources || [],
-        state: 'speaking',
+        sources: answerSources,
+        state: answerState,
       };
 
       // 4. Display response in the chat
@@ -276,9 +307,9 @@ export default function App() {
       if (isVoiceOn) {
         setActiveSpeakingMsgId(assistantMsgId);
         setVoiceStatus('speaking');
-        setPenguinState('speaking');
+        setPenguinState(answerState === 'error' ? 'error' : 'speaking');
 
-        speakText(data.answer, {
+        speakText(answerText, {
           onStart: () => {
             setVoiceStatus('speaking');
             setPenguinState('speaking');
@@ -309,7 +340,7 @@ export default function App() {
       } else {
         // Voice is OFF: visual answer-received celebration, then return to IDLE
         setVoiceStatus('off');
-        setPenguinState('happy');
+        setPenguinState(answerState === 'error' ? 'error' : 'happy');
         happyTimerRef.current = setTimeout(() => {
           setPenguinState('idle');
         }, 1600);
@@ -324,7 +355,7 @@ export default function App() {
         const errorMessage: ChatMessage = {
           id: 'msg_err_' + Date.now(),
           role: 'assistant',
-          content: `We encountered a problem: ${err.message || 'Unable to connect to college server'}. Please try asking again.`,
+          content: `We encountered a temporary connection issue. Please try asking again or contact the VSB College admission desk at +91 4324 290141.`,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           state: 'error',
         };
