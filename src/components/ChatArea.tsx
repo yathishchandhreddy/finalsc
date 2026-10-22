@@ -69,9 +69,25 @@ export function ChatArea({
   const [inputText, setInputText] = useState('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [isListeningMic, setIsListeningMic] = useState(false);
+  const [isMobile, setIsMobile] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return window.innerWidth < 768;
+    }
+    return false;
+  });
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Viewport breakpoint listener to mount the appropriate 3D canvas
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // Auto-scroll conversation smoothly on new messages or loading state
   useEffect(() => {
@@ -214,26 +230,8 @@ export function ChatArea({
         {/* ========================================================= */}
         {/* LEFT SIDE: Dedicated 3D Penguin Assistant Panel (280-320px) */}
         {/* ========================================================= */}
-        <aside className="hidden md:flex w-[280px] xl:w-[320px] shrink-0 h-full p-3 flex-col bg-slate-50/70 border-r border-slate-200/90 overflow-hidden sticky top-0 z-10">
-          <PenguinAssistant
-            state={penguinState}
-            voiceStatus={voiceStatus}
-            onStateChange={onPenguinStateChange}
-            isVoiceEnabled={isVoiceOn}
-            onToggleVoice={onToggleVoice}
-            onPauseResumeSpeech={onPauseResumeSpeech}
-            onStopSpeech={onStopSpeech}
-            className="h-full w-full"
-            isMobileCompact={false}
-          />
-        </aside>
-
-        {/* ========================================================= */}
-        {/* RIGHT SIDE: Conversation Messages & Input Area            */}
-        {/* ========================================================= */}
-        <div className="flex-1 flex flex-col h-full min-w-0 bg-white overflow-hidden">
-          {/* Mobile-only compact mascot companion bar stacked above chat */}
-          <div className="md:hidden p-2.5 border-b border-slate-200 bg-slate-50/90 shrink-0">
+        {!isMobile && (
+          <aside className="hidden md:flex w-[280px] xl:w-[320px] shrink-0 h-full p-3 flex-col bg-slate-50/70 border-r border-slate-200/90 overflow-hidden sticky top-0 z-10">
             <PenguinAssistant
               state={penguinState}
               voiceStatus={voiceStatus}
@@ -242,9 +240,31 @@ export function ChatArea({
               onToggleVoice={onToggleVoice}
               onPauseResumeSpeech={onPauseResumeSpeech}
               onStopSpeech={onStopSpeech}
-              isMobileCompact={true}
+              className="h-full w-full"
+              isMobileCompact={false}
             />
-          </div>
+          </aside>
+        )}
+
+        {/* ========================================================= */}
+        {/* RIGHT SIDE: Conversation Messages & Input Area            */}
+        {/* ========================================================= */}
+        <div className="flex-1 flex flex-col h-full min-w-0 bg-white overflow-hidden">
+          {/* Mobile-only compact mascot companion bar stacked above chat */}
+          {isMobile && (
+            <div className="md:hidden p-2.5 border-b border-slate-200 bg-slate-50/90 shrink-0">
+              <PenguinAssistant
+                state={penguinState}
+                voiceStatus={voiceStatus}
+                onStateChange={onPenguinStateChange}
+                isVoiceEnabled={isVoiceOn}
+                onToggleVoice={onToggleVoice}
+                onPauseResumeSpeech={onPauseResumeSpeech}
+                onStopSpeech={onStopSpeech}
+                isMobileCompact={true}
+              />
+            </div>
+          )}
 
           {/* Scrollable Conversation Stream */}
           <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-6">

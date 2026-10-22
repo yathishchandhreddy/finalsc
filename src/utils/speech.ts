@@ -94,14 +94,6 @@ export function stopSpeech(): void {
   } catch (e) {
     console.warn('Speech cancellation error:', e);
   }
-
-  if (oldCb?.onEnd) {
-    try {
-      oldCb.onEnd();
-    } catch (e) {
-      console.warn('Error in onEnd callback:', e);
-    }
-  }
 }
 
 export function pauseSpeech(): void {

@@ -177,7 +177,7 @@ export function PenguinAssistant({
       clearTimeout(actionTimeoutRef.current);
     }
     onStateChange?.(mood);
-    const timeouts = { greeting: 2600, thinking: 3000, happy: 2000 };
+    const timeouts = { greeting: 3200, thinking: 3200, happy: 2800 };
     actionTimeoutRef.current = setTimeout(() => {
       onStateChange?.('idle');
     }, timeouts[mood]);
@@ -185,85 +185,170 @@ export function PenguinAssistant({
 
   const currentMascotMeta = MASCOT_STATE_META[state] || MASCOT_STATE_META.idle;
   const currentVoiceMeta = VOICE_STATUS_META[voiceStatus] || VOICE_STATUS_META.ready;
-  const isSpeechActiveNow = voiceStatus === 'speaking' || voiceStatus === 'paused';
+  // Speech controls card is only active when voice is genuinely playing/paused AND mascot is speaking/listening
+  const isSpeechActiveNow = (voiceStatus === 'speaking' || voiceStatus === 'paused') && (state === 'speaking' || state === 'listening');
 
-  // Mobile compact presentation stacked above conversation
+  // Mobile compact presentation with live 3D mascot stacked above conversation
   if (isMobileCompact) {
     return (
       <>
-        <div className={`w-full rounded-2xl border border-slate-200 bg-white shadow-2xs p-3 flex items-center justify-between gap-3 ${className}`}>
-          <div className="flex items-center gap-2.5">
-            {/* Mascot Avatar with status dot */}
-            <div
-              onClick={() => setShowMobile3DModal(true)}
-              className="w-11 h-11 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center font-bold text-xs shadow-xs relative cursor-pointer shrink-0 hover:scale-105 transition-transform"
-              title="Tap to open interactive 3D Mascot view"
-            >
-              <Bot className="w-5 h-5" />
-              <span className={`absolute -top-1 -right-1 w-3 h-3 rounded-full border-2 border-white ${currentMascotMeta.dotClass}`} />
-            </div>
+        <div className={`w-full rounded-2xl border border-slate-200 bg-white shadow-2xs p-2.5 sm:p-3 flex flex-col gap-2 ${className}`}>
+          <div className="flex items-center gap-3">
+            {/* Live Compact 3D Mascot Canvas (Full body, head & feet visible) */}
+            <div className="w-[110px] sm:w-[125px] h-[125px] sm:h-[135px] shrink-0 relative rounded-xl overflow-hidden bg-gradient-to-b from-slate-50 via-white to-blue-50/30 border border-slate-200 shadow-2xs">
+              <Canvas
+                shadows
+                camera={{ position: [0, 0.35, 4.6], fov: 46 }}
+                gl={{ antialias: true, toneMappingExposure: 1.15 }}
+              >
+                <ambientLight intensity={1.15} />
+                <directionalLight position={[3.5, 6, 4.5]} intensity={1.5} castShadow />
+                <directionalLight position={[-3.5, 3, -2.5]} intensity={0.45} color="#dbeafe" />
+                <hemisphereLight intensity={0.65} groundColor="#f8fafc" color="#ffffff" />
 
-            <div>
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <span className="text-xs font-bold text-slate-900">VSB 3D Mascot</span>
-                {/* Mascot action indicator */}
-                <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold border flex items-center gap-1 ${currentMascotMeta.badgeClass}`}>
-                  <span className={`w-1.5 h-1.5 rounded-full ${currentMascotMeta.dotClass}`} />
+                <Suspense
+                  fallback={
+                    <group position={[0, 0, 0]}>
+                      <mesh>
+                        <boxGeometry args={[0.3, 0.3, 0.3]} />
+                        <meshStandardMaterial color="#2563eb" wireframe />
+                      </mesh>
+                    </group>
+                  }
+                >
+                  <ModelErrorBoundary
+                    key={customModelUrl || 'default'}
+                    fallback={
+                      <PenguinModel
+                        state={state}
+                        onModelLoaded={handleModelLoaded}
+                        modelUrl={PENGUIN_MODEL_PATH}
+                      />
+                    }
+                    onError={handleModelError}
+                  >
+                    <PenguinModel
+                      state={state}
+                      onModelLoaded={handleModelLoaded}
+                      modelUrl={customModelUrl || PENGUIN_MODEL_PATH}
+                    />
+                  </ModelErrorBoundary>
+                  <ContactShadows position={[0, -1.2, 0]} opacity={0.22} scale={3.4} blur={2.0} far={2.8} color="#64748b" />
+                </Suspense>
+
+                {/* Rotate enabled for interaction, zoom/pan disabled so page scrolls smoothly */}
+                <OrbitControls enablePan={false} enableZoom={false} enableRotate={true} minPolarAngle={Math.PI / 4} maxPolarAngle={Math.PI / 1.8} />
+              </Canvas>
+
+              {/* Status Badge in bottom corner of Canvas */}
+              <div className="absolute bottom-1 left-1 right-1 flex items-center justify-between pointer-events-none px-1">
+                <span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold border backdrop-blur-xs bg-white/90 ${currentMascotMeta.badgeClass}`}>
                   {currentMascotMeta.label}
                 </span>
-                {/* Voice playback indicator */}
-                <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium border flex items-center gap-1 ${currentVoiceMeta.badgeClass}`}>
-                  <span className={`w-1.5 h-1.5 rounded-full ${currentVoiceMeta.dotClass}`} />
-                  {currentVoiceMeta.label}
-                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowMobile3DModal(true)}
+                  className="p-1 rounded bg-white/90 border border-slate-200 text-slate-600 hover:text-slate-900 pointer-events-auto cursor-pointer shadow-2xs"
+                  title="Expand 3D View"
+                >
+                  <Maximize2 className="w-2.5 h-2.5" />
+                </button>
               </div>
-              <p className="text-[11px] text-slate-500 line-clamp-1 mt-0.5">
-                {currentMascotMeta.description}
-              </p>
             </div>
-          </div>
 
-          {/* Controls on mobile */}
-          <div className="flex items-center gap-1.5 shrink-0">
-            {isSpeechActiveNow && (
-              <>
+            {/* Mascot Details, Reactions, and Voice Controls */}
+            <div className="flex-1 min-w-0 flex flex-col justify-between h-[125px] sm:h-[135px] py-0.5">
+              <div>
+                <div className="flex items-center justify-between gap-1 flex-wrap">
+                  <span className="text-xs font-bold text-slate-900 tracking-tight">VSB 3D Mascot</span>
+                  {/* Voice Status Badge */}
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium border flex items-center gap-1 ${currentVoiceMeta.badgeClass}`}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${currentVoiceMeta.dotClass}`} />
+                    {currentVoiceMeta.label}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500 line-clamp-1 mt-0.5">
+                  {currentMascotMeta.description}
+                </p>
+              </div>
+
+              {/* Mascot Reaction Quick Buttons */}
+              <div className="grid grid-cols-3 gap-1">
                 <button
-                  onClick={onPauseResumeSpeech}
-                  className="p-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs transition-colors cursor-pointer"
-                  title={voiceStatus === 'paused' ? 'Resume Voice' : 'Pause Voice'}
+                  type="button"
+                  onClick={() => handleTriggerAction('greeting')}
+                  className={`py-1 px-1 rounded-md border text-[10px] font-medium text-center transition-colors cursor-pointer ${
+                    state === 'greeting'
+                      ? 'bg-blue-600 text-white border-blue-600 font-semibold'
+                      : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+                  }`}
+                  title="Wave Wing"
                 >
-                  {voiceStatus === 'paused' ? <Play className="w-3.5 h-3.5 fill-slate-700" /> : <Pause className="w-3.5 h-3.5" />}
+                  Wave
                 </button>
                 <button
-                  onClick={onStopSpeech}
-                  className="p-1.5 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs transition-colors cursor-pointer"
-                  title="Stop Speaking"
+                  type="button"
+                  onClick={() => handleTriggerAction('thinking')}
+                  className={`py-1 px-1 rounded-md border text-[10px] font-medium text-center transition-colors cursor-pointer ${
+                    state === 'thinking'
+                      ? 'bg-amber-600 text-white border-amber-600 font-semibold'
+                      : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+                  }`}
+                  title="Think Posture"
                 >
-                  <Square className="w-3.5 h-3.5 fill-rose-700" />
+                  Think
                 </button>
-              </>
-            )}
+                <button
+                  type="button"
+                  onClick={() => handleTriggerAction('happy')}
+                  className={`py-1 px-1 rounded-md border text-[10px] font-medium text-center transition-colors cursor-pointer ${
+                    state === 'happy'
+                      ? 'bg-teal-600 text-white border-teal-600 font-semibold'
+                      : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+                  }`}
+                  title="Happy Flap"
+                >
+                  Happy
+                </button>
+              </div>
 
-            <button
-              onClick={onToggleVoice}
-              className={`p-1.5 rounded-lg border text-xs font-medium transition-colors cursor-pointer ${
-                isVoiceEnabled
-                  ? 'bg-blue-50 border-blue-200 text-blue-700'
-                  : 'bg-slate-100 border-slate-200 text-slate-500'
-              }`}
-              title={isVoiceEnabled ? 'Voice is On' : 'Voice is Off'}
-            >
-              {isVoiceEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
-            </button>
+              {/* Controls Row */}
+              <div className="flex items-center justify-between gap-1.5 pt-1 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={onToggleVoice}
+                  className={`flex-1 py-1 px-2 rounded-lg border text-[11px] font-medium flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+                    isVoiceEnabled
+                      ? 'bg-blue-50 border-blue-200 text-blue-700 font-semibold'
+                      : 'bg-slate-100 border-slate-200 text-slate-600'
+                  }`}
+                >
+                  {isVoiceEnabled ? <Volume2 className="w-3.5 h-3.5 text-blue-600" /> : <VolumeX className="w-3.5 h-3.5" />}
+                  <span>{isVoiceEnabled ? 'Voice On' : 'Voice Off'}</span>
+                </button>
 
-            {/* Mobile 3D Expand Button */}
-            <button
-              onClick={() => setShowMobile3DModal(true)}
-              className="p-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-600 text-xs transition-colors cursor-pointer"
-              title="Open full 3D mascot interactive view"
-            >
-              <Maximize2 className="w-3.5 h-3.5" />
-            </button>
+                {isSpeechActiveNow && (
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      type="button"
+                      onClick={onPauseResumeSpeech}
+                      className="p-1 rounded-md border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 transition-colors cursor-pointer"
+                      title={voiceStatus === 'paused' ? 'Resume Voice' : 'Pause Voice'}
+                    >
+                      {voiceStatus === 'paused' ? <Play className="w-3 h-3 fill-slate-700" /> : <Pause className="w-3 h-3" />}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={onStopSpeech}
+                      className="p-1 rounded-md border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 transition-colors cursor-pointer"
+                      title="Stop Speaking"
+                    >
+                      <Square className="w-3 h-3 fill-rose-700" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         </div>
 

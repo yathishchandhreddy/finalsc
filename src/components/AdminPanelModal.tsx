@@ -156,10 +156,22 @@ export function AdminPanelModal({ isOpen, onClose, onDocumentsUpdated }: AdminPa
         headers: { Authorization: `Bearer ${token}` },
         body: formData,
       });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || data.details || 'Upload failed');
+
+      const contentType = res.headers.get('content-type') || '';
+      let data: any = null;
+
+      if (contentType.includes('application/json')) {
+        data = await res.json();
+      } else {
+        const text = await res.text();
+        const cleanMsg = text.replace(/<[^>]*>?/gm, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
+        throw new Error(cleanMsg || `Server responded with HTTP ${res.status}`);
       }
+
+      if (!res.ok) {
+        throw new Error(data?.error || data?.details || 'Upload failed');
+      }
+
       setUploadStatus({ type: 'success', message: data.message });
       fetchDocuments(token || undefined);
       onDocumentsUpdated?.();
@@ -188,10 +200,22 @@ export function AdminPanelModal({ isOpen, onClose, onDocumentsUpdated }: AdminPa
         headers: { Authorization: `Bearer ${token}` },
         body: formData,
       });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Replacement failed');
+
+      const contentType = res.headers.get('content-type') || '';
+      let data: any = null;
+
+      if (contentType.includes('application/json')) {
+        data = await res.json();
+      } else {
+        const text = await res.text();
+        const cleanMsg = text.replace(/<[^>]*>?/gm, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
+        throw new Error(cleanMsg || `Server responded with HTTP ${res.status}`);
       }
+
+      if (!res.ok) {
+        throw new Error(data?.error || 'Replacement failed');
+      }
+
       setUploadStatus({ type: 'success', message: data.message });
       setReplacingDocId(null);
       fetchDocuments(token || undefined);
@@ -214,8 +238,19 @@ export function AdminPanelModal({ isOpen, onClose, onDocumentsUpdated }: AdminPa
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Delete failed');
+
+      const contentType = res.headers.get('content-type') || '';
+      let data: any = null;
+
+      if (contentType.includes('application/json')) {
+        data = await res.json();
+      } else {
+        const text = await res.text();
+        const cleanMsg = text.replace(/<[^>]*>?/gm, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
+        throw new Error(cleanMsg || `Server responded with HTTP ${res.status}`);
+      }
+
+      if (!res.ok) throw new Error(data?.error || 'Delete failed');
       setUploadStatus({ type: 'success', message: data.message });
       fetchDocuments(token || undefined);
       onDocumentsUpdated?.();

@@ -92,6 +92,26 @@ export default function App() {
     return () => clearTimeout(timer);
   }, []);
 
+  // SpeechSynthesis heartbeat: Automatically reconciles and clears stale 'speaking' or 'paused' indicators
+  // if browser speech synthesis has ended or been interrupted
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+      const isSpeaking = window.speechSynthesis.speaking;
+      const isPaused = window.speechSynthesis.paused;
+
+      if (!isSpeaking && !isPaused && (voiceStatus === 'speaking' || voiceStatus === 'paused')) {
+        setVoiceStatus(isVoiceOn ? 'ready' : 'off');
+        setActiveSpeakingMsgId(null);
+        if (penguinState === 'speaking') {
+          setPenguinState('idle');
+        }
+      }
+    }, 250);
+
+    return () => clearInterval(interval);
+  }, [voiceStatus, isVoiceOn, penguinState]);
+
   const currentSession = sessions.find((s) => s.id === currentSessionId) || sessions[0];
   const messages = currentSession?.messages || [];
 
@@ -171,11 +191,8 @@ export default function App() {
   const handleStopSpeech = () => {
     stopSpeech();
     setActiveSpeakingMsgId(null);
-    setVoiceStatus(isVoiceOn ? 'stopped' : 'off');
+    setVoiceStatus(isVoiceOn ? 'ready' : 'off');
     setPenguinState('idle');
-    setTimeout(() => {
-      setVoiceStatus(isVoiceOn ? 'ready' : 'off');
-    }, 800);
   };
 
   // Main chat message submission handler
@@ -191,8 +208,8 @@ export default function App() {
     setActiveSpeakingMsgId(null);
     setVoiceStatus(isVoiceOn ? 'ready' : 'off');
 
-    // 2. Set mascot to LISTENING briefly
-    setPenguinState('listening');
+    // 2. Set mascot to THINKING immediately while query is being processed
+    setPenguinState('thinking');
 
     const userMessage: ChatMessage = {
       id: 'msg_user_' + Date.now(),
@@ -223,11 +240,6 @@ export default function App() {
     );
 
     setIsLoading(true);
-
-    // 3. Switch to THINKING state while AI generates response
-    setTimeout(() => {
-      setPenguinState('thinking');
-    }, 400);
 
     // Abort controller for network cancellation
     abortControllerRef.current = new AbortController();

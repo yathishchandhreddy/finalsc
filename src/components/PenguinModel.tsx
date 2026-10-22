@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { useGLTF, useAnimations } from '@react-three/drei';
 import * as THREE from 'three';
@@ -22,187 +22,139 @@ export interface ModelInspectionDetails {
   meshCount: number;
 }
 
+interface ControllableNodes {
+  head?: THREE.Object3D;
+  beakLower?: THREE.Object3D;
+  beakUpper?: THREE.Object3D;
+  wingLeft?: THREE.Object3D;
+  wingRight?: THREE.Object3D;
+  eyeLeft?: THREE.Object3D;
+  eyeRight?: THREE.Object3D;
+  footLeft?: THREE.Object3D;
+  footRight?: THREE.Object3D;
+  body?: THREE.Object3D;
+  morphMeshes: THREE.Mesh[];
+}
+
 export function PenguinModel({ state, onModelLoaded, modelUrl }: PenguinModelProps) {
   const groupRef = useRef<THREE.Group>(null);
   const targetUrl = modelUrl || PENGUIN_MODEL_PATH;
   const gltf = useGLTF(targetUrl);
   const { actions } = useAnimations(gltf.animations, groupRef);
 
-  // References to key anatomical parts detected in model
-  const nodesMap = useRef<{
-    head?: THREE.Object3D;
-    beakLower?: THREE.Object3D;
-    beakUpper?: THREE.Object3D;
-    wingLeft?: THREE.Object3D;
-    wingRight?: THREE.Object3D;
-    eyeLeft?: THREE.Object3D;
-    eyeRight?: THREE.Object3D;
-    body?: THREE.Object3D;
-    footLeft?: THREE.Object3D;
-    footRight?: THREE.Object3D;
-    morphMeshes: THREE.Mesh[];
-  }>({ morphMeshes: [] });
-
-  const inspectedSceneRef = useRef<THREE.Group | null>(null);
   const prevStateRef = useRef<PenguinState>(state);
   const stateStartTimeRef = useRef<number>(0);
+  const lastLoggedStateRef = useRef<string>('');
+  const lastLogTimeRef = useRef<number>(0);
 
-  const initialTransforms = useRef<{
-    beakLowerY?: number;
-    wingLeftZ?: number;
-    wingRightZ?: number;
-    wingRightX?: number;
-  }>({});
+  // Deep clone gltf.scene to guarantee complete scene-graph isolation across multiple canvases
+  const clonedScene = useMemo(() => {
+    if (!gltf.scene) return null;
+    return gltf.scene.clone(true);
+  }, [gltf.scene]);
 
-  const onModelLoadedRef = useRef(onModelLoaded);
-  useEffect(() => {
-    onModelLoadedRef.current = onModelLoaded;
-  });
+  // Synchronously discover and cache all controllable node references from clonedScene
+  const nodes = useMemo<ControllableNodes>(() => {
+    const map: ControllableNodes = { morphMeshes: [] };
+    if (!clonedScene) return map;
 
-  // STEP 1: Inspect model structure, skeleton, morph targets, and animation clips on mount once
-  useEffect(() => {
-    if (!gltf.scene || inspectedSceneRef.current === gltf.scene) return;
-    inspectedSceneRef.current = gltf.scene;
-
-    const detectedNodes: string[] = [];
-    const morphMeshes: THREE.Mesh[] = [];
-    const skinnedMeshes: THREE.SkinnedMesh[] = [];
-    let boneCount = 0;
-    let meshCount = 0;
-
-    const nodeRefs: typeof nodesMap.current = { morphMeshes: [] };
-
-    gltf.scene.traverse((obj) => {
-      if (obj.name) {
-        detectedNodes.push(obj.name);
-      }
-
-      if (obj instanceof THREE.Bone) {
-        boneCount++;
-      }
-
-      if (obj instanceof THREE.SkinnedMesh) {
-        skinnedMeshes.push(obj);
-      }
-
-      if (obj instanceof THREE.Mesh) {
-        meshCount++;
-        obj.castShadow = true;
-        obj.receiveShadow = true;
-
-        if (obj.morphTargetDictionary && Object.keys(obj.morphTargetDictionary).length > 0) {
-          morphMeshes.push(obj);
-        }
-      }
-
+    clonedScene.traverse((obj) => {
       const lowerName = (obj.name || '').toLowerCase();
 
-      // Specifically detect Head group (pivot at neck [0, 2.3, 0])
-      if (!nodeRefs.head) {
-        if (
-          lowerName === 'head' ||
-          lowerName === 'head_group' ||
-          (lowerName.includes('head') && !lowerName.includes('mesh') && !lowerName.includes('phone') && !lowerName.includes('pad'))
-        ) {
-          nodeRefs.head = obj;
-        }
+      // Head node (pivot at neck [0, 2.3, 0])
+      if (!map.head && (lowerName === 'head' || (lowerName.includes('head') && !lowerName.includes('mesh') && !lowerName.includes('phone') && !lowerName.includes('pad')))) {
+        map.head = obj;
       }
 
-      // Lower Beak for jaw/speaking animation
-      if (!nodeRefs.beakLower) {
-        if (lowerName.includes('beak_lower') || lowerName.includes('jaw') || lowerName.includes('mouth_down')) {
-          nodeRefs.beakLower = obj;
-        }
+      // Lower Beak for jaw/speaking articulation
+      if (!map.beakLower && (lowerName.includes('beak_lower') || lowerName.includes('jaw') || lowerName.includes('mouth_down'))) {
+        map.beakLower = obj;
       }
 
-      if (!nodeRefs.beakUpper) {
-        if (lowerName.includes('beak_upper') || lowerName.includes('mouth_up')) {
-          nodeRefs.beakUpper = obj;
-        }
+      // Upper Beak
+      if (!map.beakUpper && (lowerName.includes('beak_upper') || lowerName.includes('mouth_up'))) {
+        map.beakUpper = obj;
       }
 
-      // Wings / Arms
-      if (!nodeRefs.wingLeft) {
-        if (lowerName.includes('wing_l') || lowerName.includes('wingleft') || lowerName.includes('flipper_l') || lowerName.includes('arm_l')) {
-          nodeRefs.wingLeft = obj;
-        }
+      // Right Wing / Arm (pivot at shoulder [0.8, 1.8, 0])
+      if (!map.wingRight && (lowerName === 'wing_right' || lowerName.includes('wing_r') || lowerName.includes('wingright') || lowerName.includes('flipper_r') || lowerName.includes('arm_r'))) {
+        map.wingRight = obj;
       }
 
-      if (!nodeRefs.wingRight) {
-        if (lowerName.includes('wing_r') || lowerName.includes('wingright') || lowerName.includes('flipper_r') || lowerName.includes('arm_r')) {
-          nodeRefs.wingRight = obj;
-        }
+      // Left Wing / Arm (pivot at shoulder [-0.8, 1.8, 0])
+      if (!map.wingLeft && (lowerName === 'wing_left' || lowerName.includes('wing_l') || lowerName.includes('wingleft') || lowerName.includes('flipper_l') || lowerName.includes('arm_l'))) {
+        map.wingLeft = obj;
       }
 
       // Eyes (for blinking)
-      if (!nodeRefs.eyeLeft && (lowerName.includes('eye_l') || lowerName.includes('eyeleft'))) {
-        nodeRefs.eyeLeft = obj;
+      if (!map.eyeLeft && (lowerName.includes('eye_l') || lowerName.includes('eyeleft'))) {
+        map.eyeLeft = obj;
       }
-      if (!nodeRefs.eyeRight && (lowerName.includes('eye_r') || lowerName.includes('eyeright'))) {
-        nodeRefs.eyeRight = obj;
+      if (!map.eyeRight && (lowerName.includes('eye_r') || lowerName.includes('eyeright'))) {
+        map.eyeRight = obj;
       }
 
       // Feet
-      if (!nodeRefs.footLeft && (lowerName.includes('foot_l') || lowerName.includes('footleft') || lowerName.includes('leg_l'))) {
-        nodeRefs.footLeft = obj;
+      if (!map.footLeft && (lowerName.includes('foot_l') || lowerName.includes('footleft') || lowerName.includes('leg_l'))) {
+        map.footLeft = obj;
       }
-      if (!nodeRefs.footRight && (lowerName.includes('foot_r') || lowerName.includes('footright') || lowerName.includes('leg_r'))) {
-        nodeRefs.footRight = obj;
+      if (!map.footRight && (lowerName.includes('foot_r') || lowerName.includes('footright') || lowerName.includes('leg_r'))) {
+        map.footRight = obj;
       }
 
-      // Body / Spine
-      if (!nodeRefs.body) {
-        if (lowerName === 'body' || lowerName.includes('spine') || lowerName.includes('root')) {
-          nodeRefs.body = obj;
+      // Body / Torso
+      if (!map.body && (lowerName === 'body' || lowerName.includes('spine') || lowerName.includes('root'))) {
+        map.body = obj;
+      }
+
+      if (obj instanceof THREE.Mesh) {
+        obj.castShadow = true;
+        obj.receiveShadow = true;
+        if (obj.morphTargetDictionary && Object.keys(obj.morphTargetDictionary).length > 0) {
+          map.morphMeshes.push(obj);
         }
       }
     });
 
-    nodeRefs.morphMeshes = morphMeshes;
-    nodesMap.current = nodeRefs;
+    return map;
+  }, [clonedScene]);
 
-    initialTransforms.current = {
-      beakLowerY: nodeRefs.beakLower?.position.y ?? -0.15,
-      wingLeftZ: nodeRefs.wingLeft?.rotation.z ?? -0.12,
-      wingRightZ: nodeRefs.wingRight?.rotation.z ?? 0.12,
-      wingRightX: nodeRefs.wingRight?.rotation.x ?? 0,
-    };
+  // Initial neutral rest transforms
+  const restTransforms = useRef({
+    wingRightZ: 0,
+    wingRightX: 0,
+    wingRightY: 0,
+    wingLeftZ: 0,
+    wingLeftX: 0,
+    wingLeftY: 0,
+    headRotX: 0,
+    headRotY: 0,
+    headRotZ: 0,
+    beakLowerY: -0.15,
+  });
 
-    const details: ModelInspectionDetails = {
+  // Report model inspection metadata to parent on mount once
+  useEffect(() => {
+    if (!clonedScene) return;
+
+    const detectedNodes: string[] = [];
+    let meshCount = 0;
+    let boneCount = 0;
+
+    clonedScene.traverse((obj) => {
+      if (obj.name) detectedNodes.push(obj.name);
+      if (obj instanceof THREE.Mesh) meshCount++;
+      if (obj instanceof THREE.Bone) boneCount++;
+    });
+
+    onModelLoaded?.({
       nodeNames: detectedNodes,
       animationNames: gltf.animations?.map((a) => a.name) || [],
       hasBones: boneCount > 0,
-      hasMorphTargets: morphMeshes.length > 0,
+      hasMorphTargets: nodes.morphMeshes.length > 0,
       meshCount,
-    };
-
-    onModelLoadedRef.current?.(details);
-
-    // Detailed console diagnostic output per STEP 1
-    console.group('🐧 [VSB 3D Penguin Model Diagnostic]');
-    console.log('Model URL:', targetUrl);
-    console.log('Embedded Animation Clips:', gltf.animations?.length ? gltf.animations.map((a) => `${a.name} (${a.duration.toFixed(2)}s)`) : 'None in GLB (Using real-time kinematic animation)');
-    console.log('Skeleton / Bones:', boneCount > 0 ? `${boneCount} bones` : 'Rig-less Separate Mesh Hierarchy (Arms, Head, Feet are independent nodes)');
-    console.log('SkinnedMeshes:', skinnedMeshes.length);
-    console.log('Morph Targets:', morphMeshes.length > 0 ? morphMeshes.map((m) => Object.keys(m.morphTargetDictionary || {})) : 'None');
-    console.log('Detected Controllable Nodes:', {
-      head: nodeRefs.head ? nodeRefs.head.name : 'Not detected',
-      wingRight: nodeRefs.wingRight ? nodeRefs.wingRight.name : 'Not detected',
-      wingLeft: nodeRefs.wingLeft ? nodeRefs.wingLeft.name : 'Not detected',
-      beakLower: nodeRefs.beakLower ? nodeRefs.beakLower.name : 'Not detected',
-      eyeLeft: nodeRefs.eyeLeft ? nodeRefs.eyeLeft.name : 'Not detected',
-      eyeRight: nodeRefs.eyeRight ? nodeRefs.eyeRight.name : 'Not detected',
-      footLeft: nodeRefs.footLeft ? nodeRefs.footLeft.name : 'Not detected',
-      footRight: nodeRefs.footRight ? nodeRefs.footRight.name : 'Not detected',
     });
-    console.log('Local Node Transforms:', {
-      head: nodeRefs.head?.position.toArray(),
-      wingRight: nodeRefs.wingRight?.position.toArray(),
-      wingLeft: nodeRefs.wingLeft?.position.toArray(),
-      beakLower: nodeRefs.beakLower?.position.toArray(),
-    });
-    console.groupEnd();
-  }, [gltf.scene, gltf.animations, targetUrl]);
+  }, [clonedScene, gltf.animations, nodes.morphMeshes.length, onModelLoaded]);
 
   // Handle embedded GLTF animation clips if present
   useEffect(() => {
@@ -221,135 +173,168 @@ export function PenguinModel({ state, onModelLoaded, modelUrl }: PenguinModelPro
     }
   }, [state, actions]);
 
-  // Procedural Kinematic Animation Loop
+  // Procedural Kinematic Animation Loop using React Three Fiber's useFrame
   useFrame((stateObj, delta) => {
     if (!groupRef.current) return;
 
     const t = stateObj.clock.getElapsedTime();
-    const nodes = nodesMap.current;
 
-    // Track state transitions and elapsed time in state
+    // Detect state changes and track elapsed time in the active action state
     if (prevStateRef.current !== state) {
       prevStateRef.current = state;
       stateStartTimeRef.current = t;
+
+      // Diagnostic logging when action starts (STEP 4)
+      if (lastLoggedStateRef.current !== state) {
+        lastLoggedStateRef.current = state;
+        console.group(`🐧 [VSB 3D Mascot Action Started: ${state.toUpperCase()}]`);
+        console.log('Action Name:', state);
+        console.log('Matched GLB Nodes:', {
+          wingRight: nodes.wingRight ? `${nodes.wingRight.name} (type: ${nodes.wingRight.type})` : 'NOT FOUND',
+          wingLeft: nodes.wingLeft ? `${nodes.wingLeft.name} (type: ${nodes.wingLeft.type})` : 'NOT FOUND',
+          head: nodes.head ? `${nodes.head.name} (type: ${nodes.head.type})` : 'NOT FOUND',
+          beakLower: nodes.beakLower ? `${nodes.beakLower.name}` : 'NOT FOUND',
+        });
+        console.log('Starting Rotations:', {
+          wingRight: nodes.wingRight?.rotation.toArray().slice(0, 3),
+          wingLeft: nodes.wingLeft?.rotation.toArray().slice(0, 3),
+          head: nodes.head?.rotation.toArray().slice(0, 3),
+        });
+        console.groupEnd();
+      }
     }
+
     const elapsedInState = Math.max(0, t - stateStartTimeRef.current);
 
-    // Base root transforms
-    let targetPosY = 0;
-    let targetRotX = 0;
-    let targetRotY = 0;
-    let targetRotZ = 0;
+    // Periodic development diagnostic log during active animation (every 1s)
+    if (t - lastLogTimeRef.current > 1.0) {
+      lastLogTimeRef.current = t;
+      if (state !== 'idle') {
+        console.log(`🎬 [VSB 3D Mascot] Active state: "${state}" (${elapsedInState.toFixed(1)}s elapsed) | WingRight rotZ: ${nodes.wingRight?.rotation.z.toFixed(3)} | Head rotZ: ${nodes.head?.rotation.z.toFixed(3)}`);
+      }
+    }
 
-    // Head transforms
-    let headRotX = 0;
-    let headRotY = 0;
-    let headRotZ = 0;
+    // Base root position and orientation (centered at base Y = -1.2)
+    const baseRootY = -1.2;
+    let targetRootPosY = 0;
+    let targetRootRotX = 0;
+    let targetRootRotY = 0;
+    let targetRootRotZ = 0;
 
-    // Right Arm/Wing transforms (Z positive = raises arm outward and upward)
-    let wingRightRotZ = 0.12;
-    let wingRightRotX = 0;
-    let wingRightRotY = 0;
+    // Head target rotations
+    let targetHeadRotX = 0;
+    let targetHeadRotY = 0;
+    let targetHeadRotZ = 0;
 
-    // Left Arm/Wing transforms (Z negative = raises arm outward and upward)
-    let wingLeftRotZ = -0.12;
-    let wingLeftRotX = 0;
-    let wingLeftRotY = 0;
+    // Right Arm/Wing target rotations (Z positive rotates arm outward and upward away from body)
+    let targetWingRightRotZ = restTransforms.current.wingRightZ;
+    let targetWingRightRotX = restTransforms.current.wingRightX;
+    let targetWingRightRotY = restTransforms.current.wingRightY;
 
-    // Beak / Jaw displacement (negative Y opens beak)
-    let beakLowerDispY = 0;
+    // Left Arm/Wing target rotations (Z negative rotates arm outward and upward away from body)
+    let targetWingLeftRotZ = restTransforms.current.wingLeftZ;
+    let targetWingLeftRotX = restTransforms.current.wingLeftX;
+    let targetWingLeftRotY = restTransforms.current.wingLeftY;
 
-    // Procedural blink: every 4.2 seconds, eyes blink for 0.14s
+    // Lower Beak displacement (negative Y opens beak down)
+    let targetBeakDispY = 0;
+
+    // Procedural eye blinking: blink every 4.2 seconds for 0.14 seconds
     const blinkCycle = t % 4.2;
     const isBlinking = blinkCycle < 0.14;
-    const eyeScaleY = isBlinking ? 0.1 : 1.0;
+    const eyeScaleY = isBlinking ? 0.08 : 1.0;
     if (nodes.eyeLeft) nodes.eyeLeft.scale.y = eyeScaleY;
     if (nodes.eyeRight) nodes.eyeRight.scale.y = eyeScaleY;
 
     // =========================================================================
-    // STEP 3 & STEP 5: DISTINCT, VISIBLE ACTIONS PER STATE
+    // DISTINCT, VISIBLE ACTION KINEMATICS PER STATE
     // =========================================================================
     switch (state) {
       case 'greeting': {
-        // WAVE: Right arm visibly raises up high and waves back and forth 3+ times
-        targetPosY = Math.sin(t * 2.0) * 0.04;
-        targetRotY = 0.18; // Turns slightly towards the user
-        headRotX = 0.1 + Math.sin(t * 4.0) * 0.08; // Friendly nod
-        headRotY = 0.12;
+        // WAVE TEST (STEP 2): Right arm visibly raises high (+1.85 rad) and waves back & forth at least 3 times
+        targetRootRotY = 0.22; // Turns slightly towards the user
+        targetRootPosY = Math.sin(t * 2.5) * 0.04;
 
-        // Wave motion: Right arm raised high (+2.1 rad ~120 deg) and waving at 9Hz
-        const waveAngle = Math.sin(elapsedInState * 9.0);
-        wingRightRotZ = 2.1 + waveAngle * 0.45;
-        wingRightRotX = Math.sin(elapsedInState * 9.0) * 0.35; // Flipper waves toward user
-        wingRightRotY = -0.2;
+        // Head nods warmly and tilts slightly
+        targetHeadRotX = 0.12 + Math.sin(t * 4.0) * 0.08;
+        targetHeadRotY = 0.14;
+        targetHeadRotZ = Math.sin(elapsedInState * 6.0) * 0.12;
+
+        // Wave motion: Right arm raised high (+1.85 rad ~106 deg) and waving at 12 rad/s (~2 Hz)
+        const waveOscillation = Math.sin(elapsedInState * 12.0);
+        targetWingRightRotZ = 1.85 + waveOscillation * 0.55; // Oscillates between 1.30 and 2.40 rad
+        targetWingRightRotX = Math.sin(elapsedInState * 12.0) * 0.35; // Flipper waves toward user
+        targetWingRightRotY = -0.25;
 
         // Left arm remains relaxed at side
-        wingLeftRotZ = -0.15;
+        targetWingLeftRotZ = -0.12;
         break;
       }
 
       case 'thinking': {
-        // THINK: Head tilts noticeably and right arm moves toward chin/head
-        targetPosY = Math.sin(t * 1.5) * 0.06;
-        targetRotY = -0.1;
+        // THINK (STEP 3): Distinct head tilt and right arm raised toward chin/head
+        targetRootPosY = Math.sin(t * 1.5) * 0.04;
+        targetRootRotY = -0.15; // Looks slightly aside
 
-        // Curious head tilt
-        headRotZ = 0.42; // Distinct head tilt
-        headRotX = -0.12;
-        headRotY = Math.sin(t * 1.2) * 0.12;
+        // Distinct curious head tilt (26 degrees) and slight upward angle
+        targetHeadRotZ = 0.48; // Strong tilt to the right
+        targetHeadRotX = -0.14; // Looking upward thoughtfully
+        targetHeadRotY = Math.sin(t * 1.5) * 0.12;
 
-        // Right arm moves up and points toward chin/head
-        wingRightRotZ = 1.45;
-        wingRightRotX = 0.65;
-        wingRightRotY = -0.45;
+        // Right arm raised toward head/chin
+        targetWingRightRotZ = 1.40; // Raised outward/upward
+        targetWingRightRotX = 0.95; // Pointed forward toward beak
+        targetWingRightRotY = -0.40;
 
         // Left arm relaxed at side
-        wingLeftRotZ = -0.2;
+        targetWingLeftRotZ = -0.18;
         break;
       }
 
       case 'happy': {
-        // HAPPY: Both arms move outward and upward with celebratory body hops
-        targetPosY = Math.abs(Math.sin(elapsedInState * 8.0)) * 0.25; // Energetic hops
-        targetRotY = Math.sin(elapsedInState * 4.0) * 0.18;
-        headRotX = Math.sin(elapsedInState * 8.0) * 0.16;
-        headRotZ = Math.sin(elapsedInState * 4.0) * 0.1;
+        // HAPPY (STEP 3): Both arms raised outward and upward with visible body bounce
+        targetRootPosY = Math.abs(Math.sin(elapsedInState * 9.0)) * 0.35; // Energetic visible body bounce!
+        targetRootRotY = Math.sin(elapsedInState * 4.0) * 0.15;
+
+        // Head joyfully bobs and tilts
+        targetHeadRotX = Math.sin(elapsedInState * 9.0) * 0.22;
+        targetHeadRotZ = Math.sin(elapsedInState * 4.5) * 0.14;
 
         // Both arms raised high and flapping joyfully
-        const flapCycle = Math.sin(elapsedInState * 10.0) * 0.35;
-        wingRightRotZ = 1.85 + flapCycle;
-        wingLeftRotZ = -1.85 - flapCycle;
-        wingRightRotX = Math.sin(elapsedInState * 10.0) * 0.2;
-        wingLeftRotX = Math.sin(elapsedInState * 10.0) * 0.2;
+        const flapOscillation = Math.sin(elapsedInState * 12.0) * 0.45;
+        targetWingRightRotZ = 1.85 + flapOscillation; // Right arm high (+Z)
+        targetWingLeftRotZ = -1.85 - flapOscillation; // Left arm high (-Z)
+        targetWingRightRotX = Math.sin(elapsedInState * 12.0) * 0.25;
+        targetWingLeftRotX = Math.sin(elapsedInState * 12.0) * 0.25;
         break;
       }
 
       case 'speaking': {
-        // SPEAKING: Beak opens/closes in cadence with speech + conversational gestures
-        beakLowerDispY = -0.14 * Math.abs(Math.sin(t * 14.0));
+        // SPEAKING (STEP 5): Beak articulates up/down in cadence with speech + natural arm gestures
+        targetBeakDispY = -0.14 * Math.abs(Math.sin(t * 15.0));
 
-        // Articulating head nod and body inflection facing the conversation
-        headRotX = Math.sin(t * 7.5) * 0.12;
-        headRotY = 0.22 + Math.sin(t * 3.5) * 0.08; // Facing right toward conversation
-        headRotZ = Math.sin(t * 2.5) * 0.05;
+        // Articulating head nod and body inflection facing the chat conversation on the right
+        targetHeadRotX = Math.sin(t * 8.0) * 0.16;
+        targetHeadRotY = 0.24 + Math.sin(t * 3.5) * 0.12; // Facing right toward conversation
+        targetHeadRotZ = Math.sin(t * 2.5) * 0.06;
 
-        targetPosY = Math.sin(t * 3.5) * 0.05;
-        targetRotY = 0.22 + Math.sin(t * 2.2) * 0.08;
+        targetRootPosY = Math.sin(t * 3.5) * 0.05;
+        targetRootRotY = 0.22 + Math.sin(t * 2.2) * 0.08;
 
-        // Both arms make natural communicative gesturing motions
-        wingRightRotZ = 0.55 + Math.sin(t * 4.5) * 0.28;
-        wingLeftRotZ = -0.55 - Math.sin(t * 4.0) * 0.28;
-        wingRightRotX = Math.sin(t * 4.5) * 0.22;
-        wingLeftRotX = Math.sin(t * 4.0) * 0.22;
+        // Natural conversational flipper gestures
+        targetWingRightRotZ = 0.65 + Math.sin(t * 4.5) * 0.35;
+        targetWingLeftRotZ = -0.65 - Math.sin(t * 4.0) * 0.35;
+        targetWingRightRotX = Math.sin(t * 5.0) * 0.25;
+        targetWingLeftRotX = Math.sin(t * 4.5) * 0.25;
 
-        // Morph target fallback if custom model has mouthOpen
+        // Morph target articulation if supported
         nodes.morphMeshes.forEach((mesh) => {
           if (mesh.morphTargetInfluences && mesh.morphTargetDictionary) {
             const mouthIdx = mesh.morphTargetDictionary['mouthOpen'] ?? mesh.morphTargetDictionary['beakOpen'] ?? 0;
             mesh.morphTargetInfluences[mouthIdx] = THREE.MathUtils.damp(
               mesh.morphTargetInfluences[mouthIdx],
-              Math.abs(Math.sin(t * 14)) * 0.85,
-              18,
+              Math.abs(Math.sin(t * 15.0)) * 0.85,
+              20,
               delta
             );
           }
@@ -358,89 +343,117 @@ export function PenguinModel({ state, onModelLoaded, modelUrl }: PenguinModelPro
       }
 
       case 'listening': {
-        // LISTENING: Attentive forward lean and turns toward conversation on the right
-        targetPosY = 0.03;
-        targetRotX = 0.16; // Leans forward attentively
-        targetRotY = 0.32; // Faces toward user chat
-        headRotX = 0.1;
-        headRotY = 0.3; // Turns head right towards the conversation
-        wingRightRotZ = 0.12;
-        wingLeftRotZ = -0.12;
+        // LISTENING: Attentive forward lean and turned toward conversation
+        targetRootPosY = 0.03;
+        targetRootRotX = 0.18; // Leans forward attentively
+        targetRootRotY = 0.32; // Faces toward user chat
+        targetHeadRotX = 0.12;
+        targetHeadRotY = 0.28;
+        targetWingRightRotZ = 0.14;
+        targetWingLeftRotZ = -0.14;
         break;
       }
 
       case 'error': {
         // ERROR: Puzzled reverse head tilt and confused shake
-        targetPosY = 0;
-        headRotZ = -0.4; // Reverse tilt
-        headRotY = Math.sin(t * 8.0) * 0.22; // Confused shake
-        headRotX = 0.08;
-        wingRightRotZ = 0.35;
-        wingLeftRotZ = -0.35;
+        targetRootPosY = 0;
+        targetHeadRotZ = -0.42; // Reverse tilt
+        targetHeadRotY = Math.sin(t * 9.0) * 0.25; // Confused shake
+        targetHeadRotX = 0.10;
+        targetWingRightRotZ = 0.38;
+        targetWingLeftRotZ = -0.38;
         break;
       }
 
       case 'idle':
       default: {
-        // IDLE: Gentle natural floating, subtle flipper breathing sway
-        targetPosY = Math.sin(t * 1.5) * 0.05;
-        targetRotY = Math.sin(t * 0.8) * 0.05;
-        headRotX = Math.sin(t * 1.2) * 0.04;
-        headRotY = Math.sin(t * 0.7) * 0.06;
-        wingRightRotZ = 0.12 + Math.sin(t * 1.5) * 0.04;
-        wingLeftRotZ = -0.12 - Math.sin(t * 1.5) * 0.04;
+        // IDLE: Natural breathing flipper sway and subtle floating posture
+        targetRootPosY = Math.sin(t * 1.6) * 0.05;
+        targetRootRotY = Math.sin(t * 0.8) * 0.05;
+        targetHeadRotX = Math.sin(t * 1.4) * 0.06;
+        targetHeadRotY = Math.sin(t * 0.8) * 0.06;
+        targetWingRightRotZ = 0.08 + Math.sin(t * 1.8) * 0.06;
+        targetWingLeftRotZ = -0.08 - Math.sin(t * 1.8) * 0.06;
         break;
       }
     }
 
-    // Smooth exponential damping (speed 12 for responsive, fluid animation)
-    const dampSpeed = 12;
+    // Responsive exponential damping speed (16 for snappy, smooth, organic kinematics)
+    const dampSpeed = 16;
 
-    // Apply to main root group
-    groupRef.current.position.y = THREE.MathUtils.damp(groupRef.current.position.y, targetPosY, dampSpeed, delta);
-    groupRef.current.rotation.x = THREE.MathUtils.damp(groupRef.current.rotation.x, targetRotX, dampSpeed, delta);
-    groupRef.current.rotation.y = THREE.MathUtils.damp(groupRef.current.rotation.y, targetRotY, dampSpeed, delta);
-    groupRef.current.rotation.z = THREE.MathUtils.damp(groupRef.current.rotation.z, targetRotZ, dampSpeed, delta);
+    // 1. Root Group position and rotation
+    groupRef.current.position.y = THREE.MathUtils.damp(groupRef.current.position.y, baseRootY + targetRootPosY, dampSpeed, delta);
+    groupRef.current.rotation.x = THREE.MathUtils.damp(groupRef.current.rotation.x, targetRootRotX, dampSpeed, delta);
+    groupRef.current.rotation.y = THREE.MathUtils.damp(groupRef.current.rotation.y, targetRootRotY, dampSpeed, delta);
+    groupRef.current.rotation.z = THREE.MathUtils.damp(groupRef.current.rotation.z, targetRootRotZ, dampSpeed, delta);
 
-    // Apply to Head
+    // 2. Head Node
     if (nodes.head) {
-      nodes.head.rotation.x = THREE.MathUtils.damp(nodes.head.rotation.x, headRotX, dampSpeed, delta);
-      nodes.head.rotation.y = THREE.MathUtils.damp(nodes.head.rotation.y, headRotY, dampSpeed, delta);
-      nodes.head.rotation.z = THREE.MathUtils.damp(nodes.head.rotation.z, headRotZ, dampSpeed, delta);
+      nodes.head.rotation.x = THREE.MathUtils.damp(nodes.head.rotation.x, targetHeadRotX, dampSpeed, delta);
+      nodes.head.rotation.y = THREE.MathUtils.damp(nodes.head.rotation.y, targetHeadRotY, dampSpeed, delta);
+      nodes.head.rotation.z = THREE.MathUtils.damp(nodes.head.rotation.z, targetHeadRotZ, dampSpeed, delta);
     }
 
-    // Apply to Right Arm / Wing
+    // 3. Right Wing / Arm
     if (nodes.wingRight) {
-      nodes.wingRight.rotation.z = THREE.MathUtils.damp(nodes.wingRight.rotation.z, wingRightRotZ, dampSpeed, delta);
-      nodes.wingRight.rotation.x = THREE.MathUtils.damp(nodes.wingRight.rotation.x, wingRightRotX, dampSpeed, delta);
-      nodes.wingRight.rotation.y = THREE.MathUtils.damp(nodes.wingRight.rotation.y, wingRightRotY, dampSpeed, delta);
+      nodes.wingRight.rotation.z = THREE.MathUtils.damp(nodes.wingRight.rotation.z, targetWingRightRotZ, dampSpeed, delta);
+      nodes.wingRight.rotation.x = THREE.MathUtils.damp(nodes.wingRight.rotation.x, targetWingRightRotX, dampSpeed, delta);
+      nodes.wingRight.rotation.y = THREE.MathUtils.damp(nodes.wingRight.rotation.y, targetWingRightRotY, dampSpeed, delta);
     }
 
-    // Apply to Left Arm / Wing
+    // 4. Left Wing / Arm
     if (nodes.wingLeft) {
-      nodes.wingLeft.rotation.z = THREE.MathUtils.damp(nodes.wingLeft.rotation.z, wingLeftRotZ, dampSpeed, delta);
-      nodes.wingLeft.rotation.x = THREE.MathUtils.damp(nodes.wingLeft.rotation.x, wingLeftRotX, dampSpeed, delta);
-      nodes.wingLeft.rotation.y = THREE.MathUtils.damp(nodes.wingLeft.rotation.y, wingLeftRotY, dampSpeed, delta);
+      nodes.wingLeft.rotation.z = THREE.MathUtils.damp(nodes.wingLeft.rotation.z, targetWingLeftRotZ, dampSpeed, delta);
+      nodes.wingLeft.rotation.x = THREE.MathUtils.damp(nodes.wingLeft.rotation.x, targetWingLeftRotX, dampSpeed, delta);
+      nodes.wingLeft.rotation.y = THREE.MathUtils.damp(nodes.wingLeft.rotation.y, targetWingLeftRotY, dampSpeed, delta);
     }
 
-    // Apply to Beak Lower for speech articulation
+    // 5. Lower Beak (Speech Articulation)
     if (nodes.beakLower) {
-      const baseBeakY = initialTransforms.current.beakLowerY ?? -0.15;
+      const baseBeakY = restTransforms.current.beakLowerY;
       nodes.beakLower.position.y = THREE.MathUtils.damp(
         nodes.beakLower.position.y,
-        baseBeakY + beakLowerDispY,
-        18,
+        baseBeakY + targetBeakDispY,
+        22,
         delta
       );
     }
+
+    // Expose runtime debugging helper for developers & automated inspection
+    if (typeof window !== 'undefined') {
+      (window as any).__vsbGetMascotDebugInfo = () => ({
+        state,
+        elapsedInState: t - stateStartTimeRef.current,
+        nodesFound: {
+          wingRight: !!nodes.wingRight,
+          wingLeft: !!nodes.wingLeft,
+          head: !!nodes.head,
+          beakLower: !!nodes.beakLower,
+          body: !!nodes.body,
+        },
+        rotations: {
+          wingRight: nodes.wingRight ? nodes.wingRight.rotation.toArray().slice(0, 3) : null,
+          wingLeft: nodes.wingLeft ? nodes.wingLeft.rotation.toArray().slice(0, 3) : null,
+          head: nodes.head ? nodes.head.rotation.toArray().slice(0, 3) : null,
+          root: groupRef.current ? groupRef.current.rotation.toArray().slice(0, 3) : null,
+        },
+        rootPosition: groupRef.current ? groupRef.current.position.toArray() : null,
+      });
+    }
   });
+
+  if (!clonedScene) return null;
 
   return (
     <group ref={groupRef} dispose={null} position={[0, -1.2, 0]} scale={1.22}>
-      <primitive object={gltf.scene} />
+      <primitive object={clonedScene} />
     </group>
   );
 }
 
-// Preload the exact user specified GLB model
-useGLTF.preload(PENGUIN_MODEL_PATH);
+// Preload the permanent GLB model
+try {
+  useGLTF.preload(PENGUIN_MODEL_PATH);
+} catch {
+  // Preload safeguard
+}
